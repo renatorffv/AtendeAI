@@ -2,7 +2,17 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { Store, Message as DbMessage } from "@prisma/client";
 import { toolDefinitions, runTool, HANDOFF_TOOL_NAME, type ToolContext } from "@/lib/tools";
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+let anthropicClient: Anthropic | null = null;
+
+/** Instanciado sob demanda (não no carregamento do módulo) para não quebrar o build/coleta de rotas
+ *  do Next.js em ambientes onde ANTHROPIC_API_KEY ainda não foi configurada. */
+function getAnthropicClient() {
+  if (!anthropicClient) {
+    anthropicClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  }
+  return anthropicClient;
+}
+
 const MODEL = process.env.CLAUDE_MODEL ?? "claude-sonnet-5";
 const MAX_HISTORY_MESSAGES = 20;
 const MAX_TOOL_ITERATIONS = 6;
@@ -72,7 +82,7 @@ export async function generateReply(params: {
   let handoffTriggered = false;
 
   for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
-    const response = await anthropic.messages.create({
+    const response = await getAnthropicClient().messages.create({
       model: MODEL,
       max_tokens: 1024,
       system: buildSystemPrompt(store),
