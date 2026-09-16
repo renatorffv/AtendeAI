@@ -1,4 +1,5 @@
 import { google } from "googleapis";
+import { getGoogleAuth, extractDriveFileId } from "@/lib/googleAuth";
 
 const SHEET_RANGE = "Produtos!A2:L";
 
@@ -17,41 +18,22 @@ export type SheetProductRow = {
 };
 
 function getSheetsClient() {
-  const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
-  const privateKey = process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY?.replace(/\\n/g, "\n");
-
-  if (!email || !privateKey) {
-    throw new Error(
-      "GOOGLE_SERVICE_ACCOUNT_EMAIL / GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY não configurados.",
-    );
-  }
-
-  const auth = new google.auth.JWT({
-    email,
-    key: privateKey,
-    scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
-  });
-
+  const auth = getGoogleAuth(["https://www.googleapis.com/auth/spreadsheets.readonly"]);
   return google.sheets({ version: "v4", auth });
 }
 
-/** Converte um link de compartilhamento do Google Drive para um link de imagem direta.
- *  Links que já são de imagem direta (ou de outro serviço) são retornados sem alteração. */
+/** Converte um link de compartilhamento do Google Drive em uma URL do nosso proxy de imagens
+ *  (que busca o arquivo autenticado via API — links públicos diretos do Drive não são confiáveis
+ *  para servidores externos como o WhatsApp buscarem). Links de outros serviços não são alterados. */
 export function toDirectImageUrl(url: string): string {
   const trimmed = url.trim();
   if (!trimmed) return trimmed;
 
-  const driveMatch = trimmed.match(/drive\.google\.com\/file\/d\/([^/]+)/);
-  if (driveMatch) {
-    return `https://drive.google.com/uc?export=view&id=${driveMatch[1]}`;
-  }
+  const fileId = extractDriveFileId(trimmed);
+  if (!fileId) return trimmed;
 
-  const openMatch = trimmed.match(/drive\.google\.com\/open\?id=([^&]+)/);
-  if (openMatch) {
-    return `https://drive.google.com/uc?export=view&id=${openMatch[1]}`;
-  }
-
-  return trimmed;
+  const appUrl = process.env.APP_URL ?? "";
+  return `${appUrl}/api/images/drive/${fileId}`;
 }
 
 function parseStockBySize(raw: string): Record<string, number> {
