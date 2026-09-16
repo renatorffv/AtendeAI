@@ -1,0 +1,66 @@
+name: evolution-api-stack
+
+services:
+  evolution-postgres:
+    image: postgres:16-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: evolution
+      POSTGRES_PASSWORD: ${EVOLUTION_POSTGRES_PASSWORD}
+      POSTGRES_DB: evolution
+    volumes:
+      - evolution_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U evolution"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  evolution-redis:
+    image: redis:7-alpine
+    restart: always
+    volumes:
+      - evolution_redis_data:/data
+
+  evolution-api:
+    image: atendai/evolution-api:v2.2.3
+    restart: always
+    ports:
+      - "8080:8080"
+    depends_on:
+      evolution-postgres:
+        condition: service_healthy
+      evolution-redis:
+        condition: service_started
+    environment:
+      # Autenticação da API (esta chave vai no campo "evolutionApiKey" de cada loja no painel)
+      AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY}
+
+      # Persistência
+      DATABASE_ENABLED: "true"
+      DATABASE_PROVIDER: postgresql
+      DATABASE_CONNECTION_URI: postgresql://evolution:${EVOLUTION_POSTGRES_PASSWORD}@evolution-postgres:5432/evolution
+      DATABASE_SAVE_DATA_INSTANCE: "true"
+      DATABASE_SAVE_DATA_NEW_MESSAGE: "true"
+      DATABASE_SAVE_MESSAGE_UPDATE: "true"
+      DATABASE_SAVE_DATA_CONTACTS: "true"
+      DATABASE_SAVE_DATA_CHATS: "true"
+
+      CACHE_REDIS_ENABLED: "true"
+      CACHE_REDIS_URI: redis://evolution-redis:6379
+      CACHE_REDIS_PREFIX_KEY: evolution
+
+      # Webhook global: toda mensagem recebida é encaminhada para a nossa aplicação Next.js.
+      # A URL real inclui o storeId de cada loja: configure por instância no painel de Configurações
+      # (o valor abaixo é só o padrão global de fallback).
+      WEBHOOK_GLOBAL_ENABLED: "false"
+
+      CONFIG_SESSION_PHONE_CLIENT: "AtendeAI"
+      LOG_LEVEL: ERROR
+    volumes:
+      - evolution_instances:/evolution/instances
+
+volumes:
+  evolution_postgres_data:
+  evolution_redis_data:
+  evolution_instances:

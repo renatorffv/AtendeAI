@@ -1,0 +1,71 @@
+Criar uma aplicação para comunicação e geração de pedido de clientes de  lojas de roupas com agente de IA.
+
+a ideia é criar um agente de IA para comunicação via WhatsAPP com as clientes de lojas de roupas. vou construir essa aplicação para vender para lojas de roupas femininas.
+
+Construir aplicação em Node.js que precisa ter as seguintes funções:
+
+1. Ter um painel de controle onde faremos as configurações de numero de telefone do whatsApp 
+2. esse painel deve trazer algum tipo de dashboard para acompanharmos as comunicações com os clientes. 
+3. devemos usar a Evolution API para fazer a comunicação com whatsApp
+4. devemos ter a API do Claude como IA de comuniação com as clientes.
+5. O Painel deve ter a função de comunicação humana quando for necessário.
+6. A aplicação deve ter a função de controle de pedidos de venda gerados pelo Chat bot.
+
+
+visão geral do fluxo Cliente (WhatsApp) → WhatsApp Evolution API → Webhook (backend) 
+→ Claude (com contexto/tools) → Backend decide ação → Resposta → WhatsApp → Cliente
+
+Backend (o cérebro)
+
+Um serviço  (Node.js) que:
+
+Recebe o webhook com a mensagem do cliente
+Busca o histórico da conversa (memória de curto prazo)
+Monta o prompt com contexto + ferramentas disponíveis
+Chama a API do Claude
+Executa as ações que o Claude pedir (tool use)
+Envia a resposta de volta pro WhatsApp
+
+Claude com Tool Use — o núcleo
+
+Definições de funções que o Claude pode executar
+
+consultar_estoque(peca, tamanho) — verifica se tem no estoque.
+consultar_preco(peca).
+buscar_produtos_similares(descricao) — pra por exemplo "tem algo parecido com uma blusa floral?"
+criar_pedido(itens, cliente)
+verificar_status_pedido(numero)
+
+O Claude interpreta a linguagem natural do cliente ("vocês têm essa saia em M?") e decide qual ferramenta chamar.
+
+Base de dados do catálogo/estoque
+
+vamos trabalhar com Google Sheets. uma planilha com os produtos, peças de roupas. pode sugerir um layout para iniciarmos os cadastrados manualmente, seria bom termos opção de colocar imagens dessa planilha. assim vc pode mandar isso na comunicação com a cliente. Coloque um passo a passo de como devemos fazer isso na aplicação
+
+Imagens (catálogo visual)
+
+Como é loja de roupas, o cliente vai querer ver a peça. O bot deve conseguir:
+
+Enviar foto do produto junto com a resposta (a API do WhatsApp suporta mídia)
+Opcionalmente, receber foto do cliente e usar visão (Claude entende imagens) para responder "vocês têm algo parecido com isso?"
+
+
+Handoff para humano
+
+Importante: definir gatilhos claros pra transferir pra um atendente humano (reclamação, negociação de preço, problema com pedido) — o Claude pode ser instruído a reconhecer esses casos e avisar "vou te conectar com alguém da equipe" em vez de tentar resolver tudo sozinho. Esse conectar com alguém pode ficar no Monitor da nossa aplicação. no monitor. Deixar na aplicação um campo onde conseguimos colocar uma instrução de IA para definir quando o atendimento passa para um humano.
+
+Pedidos de vendas.. 
+
+Nesse monitor também acredito que devemos deixar os pedidos de venda, com os produtos e informações básicas dos clientes. um controle de pedido onde o funcionário da loja consiga ver os pedidos feitos via chatbot e manualmente colocar la se atendeu ou não. 
+
+
+
+Login:
+
+Para controle de acesso devemos ter acesso para Administrador Geral do sistema: (esse sou eu) e para os usuários da aplicação (lojas de roupas), os clientes das lojas somente se comunicarão via whatsapp mesmo. 
+
+Para o Administrador Geral (que sou eu) devo ter uma visão geral das lojas que estão usando esse sistema e pode ver tudo que se passa com elas.
+
+para as Lojas: essas so podem ver o que esta acontecendo com a loja delas. não podem ver o que acontece com outras lojas que também compraram a aplicação. 
+
+Vou colocar essa aplicação no Versel pode já desenvolver pensando nisso. 

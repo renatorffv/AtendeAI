@@ -1,0 +1,174 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum Role {
+  SUPER_ADMIN
+  STORE_USER
+}
+
+enum StoreStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+enum ConversationStatus {
+  BOT_ACTIVE
+  HUMAN_ACTIVE
+  CLOSED
+}
+
+enum MessageDirection {
+  IN
+  OUT
+}
+
+enum MessageSender {
+  CUSTOMER
+  BOT
+  HUMAN
+}
+
+enum OrderStatus {
+  NOVO
+  EM_ATENDIMENTO
+  CONFIRMADO
+  CANCELADO
+}
+
+model Store {
+  id                     String      @id @default(cuid())
+  name                   String
+  whatsappNumber         String?
+  evolutionInstanceName  String      @unique
+  evolutionApiUrl        String
+  evolutionApiKey        String
+  webhookSecret          String      @default(cuid())
+  googleSheetId          String?
+  aiSystemPromptExtra    String      @default("") @db.Text
+  handoffInstructions    String      @default("") @db.Text
+  status                 StoreStatus @default(ACTIVE)
+  createdAt              DateTime    @default(now())
+  updatedAt              DateTime    @updatedAt
+
+  users         User[]
+  customers     Customer[]
+  conversations Conversation[]
+  products      Product[]
+  orders        Order[]
+
+  @@map("stores")
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  role         Role
+  storeId      String?
+  store        Store?   @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  createdAt    DateTime @default(now())
+
+  handledOrders Order[] @relation("OrderHandledBy")
+
+  @@index([storeId])
+  @@map("users")
+}
+
+model Customer {
+  id          String   @id @default(cuid())
+  storeId     String
+  store       Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  phoneNumber String
+  name        String?
+  createdAt   DateTime @default(now())
+
+  conversations Conversation[]
+  orders        Order[]
+
+  @@unique([storeId, phoneNumber])
+  @@map("customers")
+}
+
+model Conversation {
+  id            String             @id @default(cuid())
+  storeId       String
+  store         Store              @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  customerId    String
+  customer      Customer           @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  status        ConversationStatus @default(BOT_ACTIVE)
+  lastMessageAt DateTime           @default(now())
+  createdAt     DateTime           @default(now())
+
+  messages Message[]
+  orders   Order[]
+
+  @@index([storeId, status])
+  @@map("conversations")
+}
+
+model Message {
+  id             String            @id @default(cuid())
+  conversationId String
+  conversation   Conversation      @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  direction      MessageDirection
+  sender         MessageSender
+  content        String            @db.Text
+  mediaUrl       String?
+  mediaType      String?
+  createdAt      DateTime          @default(now())
+
+  @@index([conversationId, createdAt])
+  @@map("messages")
+}
+
+model Product {
+  id           String   @id @default(cuid())
+  storeId      String
+  store        Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  sku          String
+  name         String
+  category     String?
+  description  String?  @db.Text
+  colors       String?
+  sizes        Json
+  stockBySize  Json
+  price        Decimal  @db.Decimal(10, 2)
+  imageUrls    Json
+  sheetRowId   Int?
+  active       Boolean  @default(true)
+  syncedAt     DateTime @default(now())
+
+  @@unique([storeId, sku])
+  @@index([storeId, active])
+  @@map("products")
+}
+
+model Order {
+  id             String        @id @default(cuid())
+  storeId        String
+  store          Store         @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  customerId     String
+  customer       Customer      @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  conversationId String?
+  conversation   Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  items          Json
+  total          Decimal       @db.Decimal(10, 2)
+  status         OrderStatus   @default(NOVO)
+  notes          String?       @db.Text
+  handledByUserId String?
+  handledBy      User?         @relation("OrderHandledBy", fields: [handledByUserId], references: [id], onDelete: SetNull)
+  handledAt      DateTime?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  @@index([storeId, status])
+  @@map("orders")
+}
