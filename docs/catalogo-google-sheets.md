@@ -1,7 +1,7 @@
 # Catálogo de produtos via Google Sheets
 
 O catálogo de cada loja fica numa planilha do Google Sheets. O AtendeAI sincroniza essa planilha para o banco
-de dados periodicamente (a cada 15 minutos) e também sob demanda (botão **Sincronizar agora** na página
+de dados periodicamente (1x por dia, ou a cada 15 minutos se a conta Vercel estiver no plano Pro) e também sob demanda (botão **Sincronizar agora** na página
 **Catálogo** do painel). O Claude consulta o catálogo já sincronizado ao responder clientes.
 
 ## 1. Layout da planilha
@@ -55,4 +55,5 @@ Regras de preenchimento:
 5. Clique em **Sincronizar agora** na página **Catálogo** para importar os produtos pela primeira vez.
 
 A partir daí, qualquer edição na planilha (novo produto, mudança de estoque, novo preço) é refletida no bot
-automaticamente na próxima sincronização (até 15 minutos) ou manualmente com o botão de sincronizar.
+automaticamente na próxima sincronização automática (1x por dia) ou, se quiser ver a mudança na hora, clicando
+no botão **Sincronizar agora**.
