@@ -35,6 +35,6 @@ export default auth((req) => {
 
 export const config = {
   matcher: [
-    "/((?!api/auth|api/webhook|api/cron|_next/static|_next/image|favicon.ico).*)",
+    "/((?!api/auth|api/webhook|api/cron|api/images|_next/static|_next/image|favicon.ico).*)",
   ],
 };
