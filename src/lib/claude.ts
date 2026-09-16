@@ -53,12 +53,23 @@ export type IncomingContent = {
   imageMediaType?: string;
 };
 
+const MAX_IMAGES_PER_REPLY = 3;
+
+/** Extrai as imagens do produto mais relevante de um resultado de ferramenta (consultar_estoque,
+ *  consultar_preco, buscar_produtos_similares), para anexar na resposta enviada ao cliente. */
+function extractImages(result: unknown): string[] {
+  const produtos = (result as { produtos?: { imagens?: unknown }[] } | null)?.produtos;
+  const imagens = produtos?.[0]?.imagens;
+  if (!Array.isArray(imagens)) return [];
+  return imagens.filter((u): u is string => typeof u === "string").slice(0, MAX_IMAGES_PER_REPLY);
+}
+
 export async function generateReply(params: {
   store: Store;
   history: DbMessage[];
   incoming: IncomingContent;
   ctx: ToolContext;
-}): Promise<{ text: string; handoffTriggered: boolean }> {
+}): Promise<{ text: string; handoffTriggered: boolean; images: string[] }> {
   const { store, history, incoming, ctx } = params;
 
   const userContent: Anthropic.ContentBlockParam[] = [];
@@ -80,6 +91,7 @@ export async function generateReply(params: {
   ];
 
   let handoffTriggered = false;
+  let lastImages: string[] = [];
 
   for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
     const response = await getAnthropicClient().messages.create({
@@ -100,7 +112,11 @@ export async function generateReply(params: {
         .map((block) => block.text)
         .join("\n")
         .trim();
-      return { text: text || "Desculpe, não consegui gerar uma resposta agora.", handoffTriggered };
+      return {
+        text: text || "Desculpe, não consegui gerar uma resposta agora.",
+        handoffTriggered,
+        images: lastImages,
+      };
     }
 
     messages.push({ role: "assistant", content: response.content });
@@ -115,6 +131,10 @@ export async function generateReply(params: {
         toolUse.input as Record<string, unknown>,
         ctx,
       );
+      const images = extractImages(result);
+      if (images.length > 0) {
+        lastImages = images;
+      }
       toolResults.push({
         type: "tool_result",
         tool_use_id: toolUse.id,
@@ -127,5 +147,6 @@ export async function generateReply(params: {
   return {
     text: "Vou verificar isso com a equipe e já te retorno.",
     handoffTriggered,
+    images: lastImages,
   };
 }
