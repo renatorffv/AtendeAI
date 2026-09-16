@@ -55,13 +55,52 @@ export type IncomingContent = {
 
 const MAX_IMAGES_PER_REPLY = 3;
 
-/** Extrai as imagens do produto mais relevante de um resultado de ferramenta (consultar_estoque,
- *  consultar_preco, buscar_produtos_similares), para anexar na resposta enviada ao cliente. */
-function extractImages(result: unknown): string[] {
-  const produtos = (result as { produtos?: { imagens?: unknown }[] } | null)?.produtos;
-  const imagens = produtos?.[0]?.imagens;
-  if (!Array.isArray(imagens)) return [];
-  return imagens.filter((u): u is string => typeof u === "string").slice(0, MAX_IMAGES_PER_REPLY);
+type ProductCandidate = { nome: string; imagens: string[] };
+
+/** Extrai os produtos citados num resultado de ferramenta (consultar_estoque, consultar_preco,
+ *  buscar_produtos_similares), para depois casar com o texto final da resposta. */
+function extractCandidates(result: unknown): ProductCandidate[] {
+  const produtos = (result as { produtos?: { nome?: unknown; imagens?: unknown }[] } | null)?.produtos;
+  if (!Array.isArray(produtos)) return [];
+  return produtos
+    .filter((p): p is { nome: string; imagens: string[] } => typeof p?.nome === "string")
+    .map((p) => ({
+      nome: p.nome,
+      imagens: Array.isArray(p.imagens) ? p.imagens.filter((u): u is string => typeof u === "string") : [],
+    }));
+}
+
+function normalize(s: string): string {
+  return s
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase();
+}
+
+/** Escolhe as imagens do produto que o texto final da resposta realmente menciona, em vez de
+ *  assumir o primeiro resultado de busca — evita mandar a foto de uma peça diferente da descrita
+ *  quando a busca retorna vários produtos parecidos. Só anexa imagem quando há confiança razoável
+ *  de que é o produto certo. */
+function pickImagesForText(text: string, candidates: ProductCandidate[]): string[] {
+  const normalizedText = normalize(text);
+  let best: { candidate: ProductCandidate; score: number } | null = null;
+
+  for (const candidate of candidates) {
+    if (candidate.imagens.length === 0) continue;
+    const words = normalize(candidate.nome)
+      .split(/\s+/)
+      .filter((w) => w.length > 2);
+    if (words.length === 0) continue;
+
+    const matches = words.filter((w) => normalizedText.includes(w)).length;
+    const score = matches / words.length;
+
+    if (score >= 0.5 && matches >= 2 && (!best || score > best.score)) {
+      best = { candidate, score };
+    }
+  }
+
+  return best ? best.candidate.imagens.slice(0, MAX_IMAGES_PER_REPLY) : [];
 }
 
 export async function generateReply(params: {
@@ -91,7 +130,7 @@ export async function generateReply(params: {
   ];
 
   let handoffTriggered = false;
-  let lastImages: string[] = [];
+  const candidates: ProductCandidate[] = [];
 
   for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
     const response = await getAnthropicClient().messages.create({
@@ -112,10 +151,11 @@ export async function generateReply(params: {
         .map((block) => block.text)
         .join("\n")
         .trim();
+      const finalText = text || "Desculpe, não consegui gerar uma resposta agora.";
       return {
-        text: text || "Desculpe, não consegui gerar uma resposta agora.",
+        text: finalText,
         handoffTriggered,
-        images: lastImages,
+        images: pickImagesForText(finalText, candidates),
       };
     }
 
@@ -131,10 +171,7 @@ export async function generateReply(params: {
         toolUse.input as Record<string, unknown>,
         ctx,
       );
-      const images = extractImages(result);
-      if (images.length > 0) {
-        lastImages = images;
-      }
+      candidates.push(...extractCandidates(result));
       toolResults.push({
         type: "tool_result",
         tool_use_id: toolUse.id,
@@ -147,6 +184,6 @@ export async function generateReply(params: {
   return {
     text: "Vou verificar isso com a equipe e já te retorno.",
     handoffTriggered,
-    images: lastImages,
+    images: [],
   };
 }
