@@ -21,18 +21,27 @@ function serializeProduct(p: Product) {
   };
 }
 
+function normalizeText(s: string): string {
+  return s
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase();
+}
+
+/** Busca produtos por palavras-chave e ordena pela relevância real (quantas palavras batem, com
+ *  peso maior para o nome) em vez da ordem arbitrária do banco — um "OR" simples faz um produto
+ *  qualquer que bate só 1 de 5 palavras (ex: uma cor em comum) aparecer antes do produto certo. */
 async function findMatchingProducts(storeId: string, query: string, limit = 5) {
-  const keywords = query
-    .toLowerCase()
+  const keywords = normalizeText(query)
     .split(/\s+/)
     .filter((w) => w.length > 2)
-    .slice(0, 6);
+    .slice(0, 8);
 
   if (keywords.length === 0) {
     return db.product.findMany({ where: { storeId, active: true }, take: limit });
   }
 
-  const products = await db.product.findMany({
+  const candidates = await db.product.findMany({
     where: {
       storeId,
       active: true,
@@ -42,10 +51,62 @@ async function findMatchingProducts(storeId: string, query: string, limit = 5) {
         { description: { contains: kw, mode: "insensitive" as const } },
       ]),
     },
-    take: 30,
+    take: 60,
   });
 
-  return products.slice(0, limit);
+  const scored = scoreProducts(candidates, keywords);
+  return scored.slice(0, limit).map((s) => s.product);
+}
+
+function scoreProducts(products: Product[], keywords: string[]) {
+  const scored = products.map((p) => {
+    const name = normalizeText(p.name);
+    const category = normalizeText(p.category ?? "");
+    const description = normalizeText(p.description ?? "");
+    let score = 0;
+    for (const kw of keywords) {
+      if (name.includes(kw)) score += 3;
+      if (category.includes(kw)) score += 2;
+      if (description.includes(kw)) score += 1;
+    }
+    return { product: p, score };
+  });
+  scored.sort((a, b) => b.score - a.score);
+  return scored;
+}
+
+/** Resolve um item de pedido pelo nome com um limiar de confiança: só retorna o produto se o nome
+ *  bater de forma clara (peso mínimo por palavra-chave batida no nome do produto), para não atribuir
+ *  um pedido ao produto errado quando o nome informado é vago ou ambíguo. */
+async function findConfidentMatch(storeId: string, query: string): Promise<Product | null> {
+  const keywords = normalizeText(query)
+    .split(/\s+/)
+    .filter((w) => w.length > 2)
+    .slice(0, 8);
+
+  if (keywords.length === 0) return null;
+
+  const candidates = await db.product.findMany({
+    where: {
+      storeId,
+      active: true,
+      OR: keywords.flatMap((kw) => [
+        { name: { contains: kw, mode: "insensitive" as const } },
+        { category: { contains: kw, mode: "insensitive" as const } },
+        { description: { contains: kw, mode: "insensitive" as const } },
+      ]),
+    },
+    take: 60,
+  });
+
+  const scored = scoreProducts(candidates, keywords);
+  const top = scored[0];
+  if (!top) return null;
+
+  const maxPossibleScore = keywords.length * 3;
+  const isConfident = top.score >= maxPossibleScore * 0.5 && (!scored[1] || top.score > scored[1].score);
+
+  return isConfident ? top.product : null;
 }
 
 export async function consultarEstoque(
@@ -103,11 +164,17 @@ export async function criarPedido(
     return { sucesso: false, mensagem: "Nenhum item informado para o pedido." };
   }
 
+  const unresolved: string[] = [];
+
   const resolvedItems = await Promise.all(
     input.itens.map(async (item) => {
       const product = item.sku
         ? await db.product.findUnique({ where: { storeId_sku: { storeId: ctx.storeId, sku: item.sku } } })
-        : (await findMatchingProducts(ctx.storeId, item.nome, 1))[0];
+        : await findConfidentMatch(ctx.storeId, item.nome);
+
+      if (!product) {
+        unresolved.push(item.nome);
+      }
 
       const unitPrice = product ? Number(product.price) : 0;
       return {
@@ -121,6 +188,15 @@ export async function criarPedido(
       };
     }),
   );
+
+  if (unresolved.length > 0) {
+    return {
+      sucesso: false,
+      mensagem:
+        `Não consegui identificar com certeza o(s) produto(s): ${unresolved.join(", ")}. ` +
+        "Use consultar_estoque para confirmar o nome exato (e o SKU) antes de criar o pedido.",
+    };
+  }
 
   const total = resolvedItems.reduce((sum, i) => sum + i.subtotal, 0);
 

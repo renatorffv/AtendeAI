@@ -49,7 +49,11 @@ export const toolDefinitions: Anthropic.Tool[] = [
     name: "criar_pedido",
     description:
       "Cria um pedido de venda com os itens escolhidos pelo cliente. Só use depois que o cliente confirmar " +
-      "explicitamente que quer fechar o pedido com os itens, tamanhos e quantidades definidos.",
+      "explicitamente que quer fechar o pedido com os itens, tamanhos e quantidades definidos. " +
+      "IMPORTANTE: sempre inclua o campo sku de cada item, usando exatamente o SKU retornado antes por " +
+      "consultar_estoque, consultar_preco ou buscar_produtos_similares na mesma conversa. Nunca invente um " +
+      "SKU nem crie o pedido baseado só no nome se você ainda não confirmou o produto certo com uma dessas " +
+      "ferramentas — se necessário, chame consultar_estoque de novo antes para ter certeza de qual produto é.",
     input_schema: {
       type: "object",
       properties: {
@@ -58,7 +62,10 @@ export const toolDefinitions: Anthropic.Tool[] = [
           items: {
             type: "object",
             properties: {
-              sku: { type: "string", description: "SKU do produto, se conhecido." },
+              sku: {
+                type: "string",
+                description: "SKU exato do produto (obtido de uma consulta anterior). Sempre preencha quando o produto já foi identificado na conversa.",
+              },
               nome: { type: "string", description: "Nome da peça." },
               tamanho: { type: "string" },
               cor: { type: "string" },
