@@ -29,8 +29,13 @@ export async function POST(
 
   const customer = await db.customer.upsert({
     where: { storeId_phoneNumber: { storeId: store.id, phoneNumber: parsed.phoneNumber } },
-    update: parsed.pushName ? { name: parsed.pushName } : {},
-    create: { storeId: store.id, phoneNumber: parsed.phoneNumber, name: parsed.pushName },
+    update: { whatsappJid: parsed.remoteJid, ...(parsed.pushName ? { name: parsed.pushName } : {}) },
+    create: {
+      storeId: store.id,
+      phoneNumber: parsed.phoneNumber,
+      whatsappJid: parsed.remoteJid,
+      name: parsed.pushName,
+    },
   });
 
   let conversation = await db.conversation.findFirst({

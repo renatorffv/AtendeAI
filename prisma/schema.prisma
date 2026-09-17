@@ -83,12 +83,16 @@ model User {
 }
 
 model Customer {
-  id          String   @id @default(cuid())
-  storeId     String
-  store       Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  phoneNumber String
-  name        String?
-  createdAt   DateTime @default(now())
+  id           String   @id @default(cuid())
+  storeId      String
+  store        Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  phoneNumber  String
+  /// JID completo do WhatsApp (ex: "5511999999999@s.whatsapp.net" ou, para contas que usam
+  /// identificador vinculado, "123456789012345@lid") — usado para enviar mensagens de volta ao
+  /// cliente. phoneNumber sozinho não é suficiente: contas "@lid" não têm um número reconstruível.
+  whatsappJid  String?
+  name         String?
+  createdAt    DateTime @default(now())
 
   conversations Conversation[]
   orders        Order[]

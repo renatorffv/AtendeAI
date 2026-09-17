@@ -107,6 +107,7 @@ function ConversationView({
 
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -116,13 +117,18 @@ function ConversationView({
   async function sendMessage() {
     if (!draft.trim()) return;
     setSending(true);
-    await fetch(`/api/store/monitor/${conversationId}`, {
+    setSendError(null);
+    const res = await fetch(`/api/store/monitor/${conversationId}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ type: "message", content: draft }),
     });
+    const body = await res.json().catch(() => ({}));
     setDraft("");
     setSending(false);
+    if (!res.ok) {
+      setSendError(body.error || "Não foi possível entregar a mensagem no WhatsApp.");
+    }
     mutate();
     onChanged();
   }
@@ -193,6 +199,12 @@ function ConversationView({
         ))}
         <div ref={bottomRef} />
       </div>
+
+      {sendError && (
+        <p className="border-t border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          ⚠️ {sendError}
+        </p>
+      )}
 
       <div className="flex gap-2 border-t border-neutral-200 p-3">
         <input

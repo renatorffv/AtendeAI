@@ -54,6 +54,25 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     const content = String(body.content ?? "").trim();
     if (!content) return NextResponse.json({ error: "Mensagem vazia" }, { status: 400 });
 
+    const targetJid =
+      conversation.customer.whatsappJid ?? `${conversation.customer.phoneNumber}@s.whatsapp.net`;
+
+    let deliveryError: string | null = null;
+    try {
+      await sendText(
+        {
+          apiUrl: conversation.store.evolutionApiUrl,
+          apiKey: conversation.store.evolutionApiKey,
+          instanceName: conversation.store.evolutionInstanceName,
+        },
+        targetJid,
+        content,
+      );
+    } catch (err) {
+      deliveryError = err instanceof Error ? err.message : "Falha ao enviar mensagem.";
+      console.error("Falha ao enviar mensagem manual:", err);
+    }
+
     await db.message.create({
       data: { conversationId: id, direction: "OUT", sender: "HUMAN", content },
     });
@@ -62,15 +81,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       data: { status: "HUMAN_ACTIVE", lastMessageAt: new Date() },
     });
 
-    await sendText(
-      {
-        apiUrl: conversation.store.evolutionApiUrl,
-        apiKey: conversation.store.evolutionApiKey,
-        instanceName: conversation.store.evolutionInstanceName,
-      },
-      `${conversation.customer.phoneNumber}@s.whatsapp.net`,
-      content,
-    ).catch((err) => console.error("Falha ao enviar mensagem manual:", err));
+    if (deliveryError) {
+      return NextResponse.json({ ok: false, error: deliveryError }, { status: 502 });
+    }
 
     return NextResponse.json({ ok: true });
   }
