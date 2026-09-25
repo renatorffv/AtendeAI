@@ -1,8 +1,14 @@
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 import { db } from "@/lib/db";
 import { parseEvolutionWebhookPayload } from "@/lib/evolutionWebhook";
 import { generateReply } from "@/lib/claude";
-import { sendText, sendImage } from "@/lib/evolution";
+import {
+  sendText,
+  sendImage,
+  markAsRead,
+  typingDelayFor,
+  pauseBetweenImages,
+} from "@/lib/evolution";
 
 export async function POST(
   request: Request,
@@ -23,7 +29,12 @@ export async function POST(
   const body = await request.json().catch(() => null);
   const parsed = parseEvolutionWebhookPayload(body);
 
-  if (!parsed || parsed.fromMe || !parsed.text.trim() && !parsed.imageBase64) {
+  if (
+    !parsed ||
+    parsed.fromMe ||
+    parsed.isNonPrivateChat ||
+    (!parsed.text.trim() && !parsed.imageBase64)
+  ) {
     return NextResponse.json({ ok: true, ignored: true });
   }
 
@@ -68,54 +79,65 @@ export async function POST(
     return NextResponse.json({ ok: true, handledByHuman: true });
   }
 
-  const history = await db.message.findMany({
-    where: { conversationId: conversation.id },
-    orderBy: { createdAt: "asc" },
-    take: 40,
-  });
-
-  const { text, images } = await generateReply({
-    store,
-    history: history.slice(0, -1),
-    incoming: {
-      text: parsed.text,
-      imageBase64: parsed.imageBase64 ?? undefined,
-      imageMediaType: parsed.imageMimeType ?? undefined,
-    },
-    ctx: { storeId: store.id, customerId: customer.id, conversationId: conversation.id },
-  });
-
-  await db.message.create({
-    data: {
-      conversationId: conversation.id,
-      direction: "OUT",
-      sender: "BOT",
-      content: text,
-      mediaUrl: images[0] ?? null,
-      mediaType: images[0] ? "image" : null,
-    },
-  });
-
+  const conversationId = conversation.id;
   const creds = {
     apiUrl: store.evolutionApiUrl,
     apiKey: store.evolutionApiKey,
     instanceName: store.evolutionInstanceName,
   };
 
-  if (images.length > 0) {
-    await sendImage(creds, parsed.remoteJid, images[0], text).catch((err) =>
-      console.error("Falha ao enviar imagem via Evolution API:", err),
-    );
-    for (const extra of images.slice(1)) {
-      await sendImage(creds, parsed.remoteJid, extra).catch((err) =>
-        console.error("Falha ao enviar imagem extra via Evolution API:", err),
+  // Responde o webhook na hora e gera/envia a resposta em seguida: o "digitando…" e as pausas
+  // entre imagens deixam o envio mais lento, e a Evolution não deve ficar esperando por isso.
+  after(async () => {
+    if (parsed.messageId) {
+      await markAsRead(creds, parsed.remoteJid, parsed.messageId).catch((err) =>
+        console.error("Falha ao marcar mensagem como lida via Evolution API:", err),
       );
     }
-  } else {
-    await sendText(creds, parsed.remoteJid, text).catch((err) =>
-      console.error("Falha ao enviar resposta via Evolution API:", err),
-    );
-  }
+
+    const history = await db.message.findMany({
+      where: { conversationId },
+      orderBy: { createdAt: "asc" },
+      take: 40,
+    });
+
+    const { text, images } = await generateReply({
+      store,
+      history: history.slice(0, -1),
+      incoming: {
+        text: parsed.text,
+        imageBase64: parsed.imageBase64 ?? undefined,
+        imageMediaType: parsed.imageMimeType ?? undefined,
+      },
+      ctx: { storeId: store.id, customerId: customer.id, conversationId },
+    });
+
+    await db.message.create({
+      data: {
+        conversationId,
+        direction: "OUT",
+        sender: "BOT",
+        content: text,
+        mediaUrl: images[0] ?? null,
+        mediaType: images[0] ? "image" : null,
+      },
+    });
+
+    if (images.length > 0) {
+      await sendImage(creds, parsed.remoteJid, images[0], text, typingDelayFor(text)).catch((err) =>
+        console.error("Falha ao enviar imagem via Evolution API:", err),
+      );
+      for (const extra of images.slice(1)) {
+        await sendImage(creds, parsed.remoteJid, extra, undefined, pauseBetweenImages()).catch((err) =>
+          console.error("Falha ao enviar imagem extra via Evolution API:", err),
+        );
+      }
+    } else {
+      await sendText(creds, parsed.remoteJid, text, typingDelayFor(text)).catch((err) =>
+        console.error("Falha ao enviar resposta via Evolution API:", err),
+      );
+    }
+  });
 
   return NextResponse.json({ ok: true });
 }

@@ -3,7 +3,10 @@
 
 export type ParsedIncomingMessage = {
   fromMe: boolean;
+  messageId: string | null;
   remoteJid: string;
+  /** Grupo, status, lista de transmissão ou canal — o bot nunca deve responder nesses chats. */
+  isNonPrivateChat: boolean;
   phoneNumber: string;
   pushName: string | null;
   text: string;
@@ -21,6 +24,8 @@ export function parseEvolutionWebhookPayload(body: unknown): ParsedIncomingMessa
   if (!remoteJid) return null;
 
   const fromMe = Boolean(key?.fromMe);
+  const messageId = (key?.id as string) ?? null;
+  const isNonPrivateChat = /@(g\.us|broadcast|newsletter)$/.test(remoteJid);
   const phoneNumber = remoteJid.split("@")[0];
   const pushName = (data.pushName as string) ?? null;
 
@@ -37,7 +42,9 @@ export function parseEvolutionWebhookPayload(body: unknown): ParsedIncomingMessa
 
   return {
     fromMe,
+    messageId,
     remoteJid,
+    isNonPrivateChat,
     phoneNumber,
     pushName,
     text: String(text ?? ""),

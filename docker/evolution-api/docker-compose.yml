@@ -23,7 +23,7 @@ services:
       - evolution_redis_data:/data
 
   evolution-api:
-    image: evoapicloud/evolution-api:v2.3.0
+    image: evoapicloud/evolution-api:v2.3.7
     restart: always
     ports:
       - "8080:8080"
