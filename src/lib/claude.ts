@@ -175,6 +175,31 @@ function limitPhotosToRequest(result: unknown, currentText: string, lastBotText:
   };
 }
 
+function plain(s: string) {
+  return s
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase();
+}
+
+/** A conversa está falando de fotos (pedido na mensagem atual, ou oferta na última resposta do bot). */
+function photosInContext(currentText: string, lastBotText: string) {
+  return /fot|imag/.test(plain(currentText)) || /fot/.test(plain(lastBotText));
+}
+
+/** A resposta afirma que fotos foram enviadas ("mandei", "seguem", "aí está"...). */
+function claimsPhotosSent(text: string) {
+  return /\b(mandei|enviei|seguem|segue|aqui estao|aqui esta|ai estao|ai esta|ai vai|ai vao|la vai|la vao)\b/.test(
+    plain(text),
+  );
+}
+
+const MISSING_PHOTOS_NUDGE =
+  `[Aviso do sistema, não é a cliente] Sua resposta diz que enviou fotos, mas você não chamou a ferramenta ` +
+  `${PHOTOS_TOOL_NAME} — nenhuma foto foi enviada. Se a cliente pediu fotos, chame ${PHOTOS_TOOL_NAME} agora ` +
+  "com os produtos pedidos e depois escreva a resposta. Se não era para enviar fotos, reescreva a resposta " +
+  "sem dizer que enviou.";
+
 /** Monta as fotos a partir dos produtos pedidos pela IA via enviar_fotos, na ordem em que foram pedidos.
  *  Um produto: até 3 fotos dele, com o texto da resposta como legenda. Vários: a primeira foto de cada
  *  um, com nome e preço na legenda. */
@@ -221,6 +246,7 @@ export async function generateReply(params: {
   let handoffTriggered = false;
   const requestedPhotos: ProductCandidate[] = [];
   const lastBotText = history.findLast((m) => m.direction === "OUT")?.content ?? "";
+  let nudgedForPhotos = false;
 
   for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
     const response = await getAnthropicClient().messages.create({
@@ -241,6 +267,21 @@ export async function generateReply(params: {
         .map((block) => block.text)
         .join("\n")
         .trim();
+
+      // A IA às vezes responde "seguem as fotos" pelo histórico sem chamar enviar_fotos, e nada chega à
+      // cliente. Nesse caso, devolve a resposta para ela com um aviso e pede uma nova tentativa (uma vez).
+      if (
+        !nudgedForPhotos &&
+        requestedPhotos.length === 0 &&
+        photosInContext(incoming.text, lastBotText) &&
+        claimsPhotosSent(text)
+      ) {
+        nudgedForPhotos = true;
+        messages.push({ role: "assistant", content: response.content });
+        messages.push({ role: "user", content: MISSING_PHOTOS_NUDGE });
+        continue;
+      }
+
       const finalText = stripLinks(text) || "Desculpe, não consegui gerar uma resposta agora.";
       return {
         text: finalText,

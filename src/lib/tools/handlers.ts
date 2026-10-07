@@ -164,9 +164,11 @@ export async function enviarFotos(
   const semFotos: string[] = [];
 
   for (const item of input.produtos ?? []) {
-    const product = item.sku
+    // A IA às vezes "deduz" o SKU a partir do número no nome; se ele não existir, tenta pelo nome.
+    const bySku = item.sku
       ? await db.product.findUnique({ where: { storeId_sku: { storeId: ctx.storeId, sku: item.sku } } })
-      : await findConfidentMatch(ctx.storeId, item.nome);
+      : null;
+    const product = bySku ?? (await findConfidentMatch(ctx.storeId, item.nome));
 
     if (!product) naoEncontrados.push(item.nome);
     else if (imageUrlsOf(product).length === 0) semFotos.push(product.name);
