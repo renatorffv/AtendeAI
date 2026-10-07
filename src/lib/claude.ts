@@ -22,8 +22,11 @@ function buildSystemPrompt(store: Store) {
 com clientes pelo WhatsApp. Seja simpática, natural e objetiva, como uma vendedora de loja física experiente.
 Use as ferramentas disponíveis para consultar estoque, preços e produtos parecidos, e para criar pedidos —
 nunca invente informação de estoque, preço ou produto que não veio de uma ferramenta.
-Ao apresentar produtos, mencione nome, preço e tamanhos/cores disponíveis. Se o produto tiver imagens, deixe
-claro que você pode enviar fotos.
+Ao apresentar produtos, mencione nome, preço e tamanhos/cores disponíveis. Se o produto tiver fotos
+(campo temFotos), deixe claro que você pode enviar fotos.
+As fotos são enviadas automaticamente junto com a sua resposta para cada produto que você citar pelo nome
+completo — para mandar fotos de vários produtos, cite o nome completo de cada um na mesma resposta.
+Nunca inclua links ou URLs nas mensagens.
 Confirme sempre os itens, tamanhos e quantidades com o cliente antes de chamar a ferramenta criar_pedido.
 Responda sempre em português do Brasil, em mensagens curtas adequadas para WhatsApp.`;
 
@@ -53,7 +56,8 @@ export type IncomingContent = {
   imageMediaType?: string;
 };
 
-const MAX_IMAGES_PER_REPLY = 3;
+const MAX_IMAGES_PER_REPLY = 4;
+const MAX_IMAGES_SINGLE_PRODUCT = 3;
 
 type ProductCandidate = { nome: string; imagens: string[] };
 
@@ -70,6 +74,33 @@ function extractCandidates(result: unknown): ProductCandidate[] {
     }));
 }
 
+/** O resultado das ferramentas vai para o modelo sem as URLs das fotos (só `temFotos`): com a URL
+ *  à vista, o modelo às vezes a cola na mensagem, expondo um link do AtendeAI para a cliente. As URLs
+ *  continuam disponíveis para o envio das fotos via `extractCandidates`. */
+function hideImageUrls(result: unknown): unknown {
+  const r = result as { produtos?: unknown } | null;
+  if (!r || !Array.isArray(r.produtos)) return result;
+  return {
+    ...r,
+    produtos: r.produtos.map((p) => {
+      if (!p || typeof p !== "object" || !("imagens" in p)) return p;
+      const { imagens, ...rest } = p as { imagens?: unknown };
+      return { ...rest, temFotos: Array.isArray(imagens) && imagens.length > 0 };
+    }),
+  };
+}
+
+/** Rede de segurança: remove qualquer link que ainda apareça no texto antes de ir para o WhatsApp. */
+function stripLinks(text: string): string {
+  return text
+    .replace(/\[([^\]]+)\]\(\s*https?:\/\/[^)]*\)/gi, "$1")
+    .replace(/<?https?:\/\/[^\s>)]+>?/gi, "")
+    .replace(/[ \t]+$/gm, "")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 function normalize(s: string): string {
   return s
     .normalize("NFD")
@@ -77,30 +108,48 @@ function normalize(s: string): string {
     .toLowerCase();
 }
 
-/** Escolhe as imagens do produto que o texto final da resposta realmente menciona, em vez de
- *  assumir o primeiro resultado de busca — evita mandar a foto de uma peça diferente da descrita
- *  quando a busca retorna vários produtos parecidos. Só anexa imagem quando há confiança razoável
- *  de que é o produto certo. */
+/** Escolhe as imagens dos produtos que o texto final da resposta realmente menciona, em vez de
+ *  assumir o primeiro resultado de busca. Pode haver vários produtos citados (ex: "fotos dos dois
+ *  shorts"); um candidato é descartado quando as palavras que bateram dele estão contidas nas de
+ *  outro candidato — assim "Short Jeans Azul" no texto não puxa também a foto do "Short Jeans Preto". */
 function pickImagesForText(text: string, candidates: ProductCandidate[]): string[] {
   const normalizedText = normalize(text);
-  let best: { candidate: ProductCandidate; score: number } | null = null;
+  const seen = new Set<string>();
+  const matched: { candidate: ProductCandidate; words: Set<string>; score: number }[] = [];
 
   for (const candidate of candidates) {
-    if (candidate.imagens.length === 0) continue;
-    const words = normalize(candidate.nome)
-      .split(/\s+/)
-      .filter((w) => w.length > 2);
-    if (words.length === 0) continue;
+    if (candidate.imagens.length === 0 || seen.has(candidate.nome)) continue;
+    seen.add(candidate.nome);
+    const words = new Set(
+      normalize(candidate.nome)
+        .split(/\s+/)
+        .filter((w) => w.length > 2),
+    );
+    if (words.size === 0) continue;
 
-    const matches = words.filter((w) => normalizedText.includes(w)).length;
-    const score = matches / words.length;
-
-    if (score >= 0.5 && matches >= 2 && (!best || score > best.score)) {
-      best = { candidate, score };
+    const hits = new Set([...words].filter((w) => normalizedText.includes(w)));
+    const score = hits.size / words.size;
+    if (score >= 0.5 && hits.size >= 2) {
+      matched.push({ candidate, words: hits, score });
     }
   }
 
-  return best ? best.candidate.imagens.slice(0, MAX_IMAGES_PER_REPLY) : [];
+  matched.sort((a, b) => b.score - a.score);
+  const isSubset = (a: Set<string>, b: Set<string>) => [...a].every((w) => b.has(w));
+  const selected = matched.filter(
+    (m, i) => !matched.some((other, j) => j < i && isSubset(m.words, other.words)),
+  );
+
+  if (selected.length === 0) return [];
+  if (selected.length === 1) return selected[0].candidate.imagens.slice(0, MAX_IMAGES_SINGLE_PRODUCT);
+
+  // Vários produtos: a primeira foto de cada um, na ordem em que aparecem no texto.
+  const position = (m: (typeof selected)[number]) =>
+    Math.min(...[...m.words].map((w) => normalizedText.indexOf(w)));
+  return selected
+    .sort((a, b) => position(a) - position(b))
+    .map((m) => m.candidate.imagens[0])
+    .slice(0, MAX_IMAGES_PER_REPLY);
 }
 
 export async function generateReply(params: {
@@ -151,7 +200,7 @@ export async function generateReply(params: {
         .map((block) => block.text)
         .join("\n")
         .trim();
-      const finalText = text || "Desculpe, não consegui gerar uma resposta agora.";
+      const finalText = stripLinks(text) || "Desculpe, não consegui gerar uma resposta agora.";
       return {
         text: finalText,
         handoffTriggered,
@@ -175,7 +224,7 @@ export async function generateReply(params: {
       toolResults.push({
         type: "tool_result",
         tool_use_id: toolUse.id,
-        content: JSON.stringify(result),
+        content: JSON.stringify(hideImageUrls(result)),
       });
     }
     messages.push({ role: "user", content: toolResults });
