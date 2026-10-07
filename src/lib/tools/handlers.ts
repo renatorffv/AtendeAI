@@ -148,6 +148,47 @@ export async function buscarProdutosSimilares(ctx: ToolContext, input: { descric
   return { produtos: matches.map(serializeProduct) };
 }
 
+function imageUrlsOf(p: Product): string[] {
+  return Array.isArray(p.imageUrls) ? p.imageUrls.filter((u): u is string => typeof u === "string") : [];
+}
+
+/** Resolve os produtos cujas fotos a IA quer mandar (por SKU ou nome, com o mesmo critério de confiança
+ *  dos pedidos). O envio em si é feito depois da resposta; aqui só devolvemos as URLs das fotos, que o
+ *  claude.ts esconde do modelo. */
+export async function enviarFotos(
+  ctx: ToolContext,
+  input: { produtos: { nome: string; sku?: string }[] },
+) {
+  const found: Product[] = [];
+  const naoEncontrados: string[] = [];
+  const semFotos: string[] = [];
+
+  for (const item of input.produtos ?? []) {
+    const product = item.sku
+      ? await db.product.findUnique({ where: { storeId_sku: { storeId: ctx.storeId, sku: item.sku } } })
+      : await findConfidentMatch(ctx.storeId, item.nome);
+
+    if (!product) naoEncontrados.push(item.nome);
+    else if (imageUrlsOf(product).length === 0) semFotos.push(product.name);
+    else if (!found.some((p) => p.id === product.id)) found.push(product);
+  }
+
+  const avisos: string[] = [];
+  if (naoEncontrados.length > 0) {
+    avisos.push(
+      `Não identifiquei com certeza: ${naoEncontrados.join(", ")}. Use consultar_estoque para confirmar o ` +
+        "nome exato (e o SKU) e chame enviar_fotos de novo.",
+    );
+  }
+  if (semFotos.length > 0) avisos.push(`Sem fotos cadastradas: ${semFotos.join(", ")}.`);
+
+  return {
+    sucesso: found.length > 0,
+    produtos: found.map((p) => ({ sku: p.sku, nome: p.name, preco: Number(p.price), imagens: imageUrlsOf(p) })),
+    ...(avisos.length > 0 ? { mensagem: avisos.join(" ") } : {}),
+  };
+}
+
 type PedidoItemInput = {
   sku?: string;
   nome: string;

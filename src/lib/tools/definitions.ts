@@ -46,6 +46,31 @@ export const toolDefinitions: Anthropic.Tool[] = [
     },
   },
   {
+    name: "enviar_fotos",
+    description:
+      "Envia para a cliente as fotos de um ou mais produtos do catálogo, junto com a sua resposta. É a ÚNICA " +
+      "forma de mandar fotos: use sempre que a cliente pedir fotos, inclusive para reenviar fotos já mandadas. " +
+      "Informe o nome completo de cada produto, exatamente como aparece no catálogo, e o SKU quando souber.",
+    input_schema: {
+      type: "object",
+      properties: {
+        produtos: {
+          type: "array",
+          minItems: 1,
+          items: {
+            type: "object",
+            properties: {
+              nome: { type: "string", description: "Nome completo do produto." },
+              sku: { type: "string", description: "SKU do produto, se conhecido." },
+            },
+            required: ["nome"],
+          },
+        },
+      },
+      required: ["produtos"],
+    },
+  },
+  {
     name: "criar_pedido",
     description:
       "Cria um pedido de venda com os itens escolhidos pelo cliente. Só use depois que o cliente confirmar " +

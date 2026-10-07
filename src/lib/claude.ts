@@ -1,6 +1,12 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { Store, Message as DbMessage } from "@prisma/client";
-import { toolDefinitions, runTool, HANDOFF_TOOL_NAME, type ToolContext } from "@/lib/tools";
+import {
+  toolDefinitions,
+  runTool,
+  HANDOFF_TOOL_NAME,
+  PHOTOS_TOOL_NAME,
+  type ToolContext,
+} from "@/lib/tools";
 
 let anthropicClient: Anthropic | null = null;
 
@@ -24,8 +30,10 @@ Use as ferramentas disponíveis para consultar estoque, preços e produtos parec
 nunca invente informação de estoque, preço ou produto que não veio de uma ferramenta.
 Ao apresentar produtos, mencione nome, preço e tamanhos/cores disponíveis. Se o produto tiver fotos
 (campo temFotos), deixe claro que você pode enviar fotos.
-As fotos são enviadas automaticamente junto com a sua resposta para cada produto que você citar pelo nome
-completo — para mandar fotos de vários produtos, cite o nome completo de cada um na mesma resposta.
+Fotos só chegam à cliente pela ferramenta ${PHOTOS_TOOL_NAME}: sempre que ela pedir fotos (inclusive para
+mandar de novo), chame essa ferramenta com o nome completo de cada produto. Nunca diga que enviou fotos sem
+ter chamado ${PHOTOS_TOOL_NAME} nesta mesma resposta. Quando mandar fotos de vários produtos, cada foto já
+vai com nome e preço na legenda — então mantenha o texto da resposta curto, sem repetir a lista.
 Nunca inclua links ou URLs nas mensagens.
 Confirme sempre os itens, tamanhos e quantidades com o cliente antes de chamar a ferramenta criar_pedido.
 Responda sempre em português do Brasil, em mensagens curtas adequadas para WhatsApp.`;
@@ -65,8 +73,7 @@ type ProductCandidate = { nome: string; imagens: string[]; preco: number | null 
  *  foto leva o nome e o preço do seu produto, e o texto da resposta vai numa mensagem separada. */
 export type ReplyImage = { url: string; caption?: string };
 
-/** Extrai os produtos citados num resultado de ferramenta (consultar_estoque, consultar_preco,
- *  buscar_produtos_similares), para depois casar com o texto final da resposta. */
+/** Extrai os produtos (com URLs das fotos e preço) do resultado da ferramenta enviar_fotos. */
 function extractCandidates(result: unknown): ProductCandidate[] {
   const produtos = (result as { produtos?: { nome?: unknown; imagens?: unknown; preco?: unknown }[] } | null)
     ?.produtos;
@@ -88,7 +95,8 @@ function productCaption(candidate: ProductCandidate): string {
 
 /** O resultado das ferramentas vai para o modelo sem as URLs das fotos (só `temFotos`): com a URL
  *  à vista, o modelo às vezes a cola na mensagem, expondo um link do AtendeAI para a cliente. As URLs
- *  continuam disponíveis para o envio das fotos via `extractCandidates`. */
+ *  continuam disponíveis para o envio das fotos via `extractCandidates`. Vale para todas as ferramentas
+ *  que devolvem produtos, não só enviar_fotos. */
 function hideImageUrls(result: unknown): unknown {
   const r = result as { produtos?: unknown } | null;
   if (!r || !Array.isArray(r.produtos)) return result;
@@ -113,57 +121,21 @@ function stripLinks(text: string): string {
     .trim();
 }
 
-function normalize(s: string): string {
-  return s
-    .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
-    .toLowerCase();
-}
-
-/** Escolhe as imagens dos produtos que o texto final da resposta realmente menciona, em vez de
- *  assumir o primeiro resultado de busca. Pode haver vários produtos citados (ex: "fotos dos dois
- *  shorts"); um candidato é descartado quando as palavras que bateram dele estão contidas nas de
- *  outro candidato — assim "Short Jeans Azul" no texto não puxa também a foto do "Short Jeans Preto". */
-function pickImagesForText(text: string, candidates: ProductCandidate[]): ReplyImage[] {
-  const normalizedText = normalize(text);
-  const seen = new Set<string>();
-  const matched: { candidate: ProductCandidate; words: Set<string>; score: number }[] = [];
-
-  for (const candidate of candidates) {
-    if (candidate.imagens.length === 0 || seen.has(candidate.nome)) continue;
-    seen.add(candidate.nome);
-    const words = new Set(
-      normalize(candidate.nome)
-        .split(/\s+/)
-        .filter((w) => w.length > 2),
-    );
-    if (words.size === 0) continue;
-
-    const hits = new Set([...words].filter((w) => normalizedText.includes(w)));
-    const score = hits.size / words.size;
-    if (score >= 0.5 && hits.size >= 2) {
-      matched.push({ candidate, words: hits, score });
-    }
-  }
-
-  matched.sort((a, b) => b.score - a.score);
-  const isSubset = (a: Set<string>, b: Set<string>) => [...a].every((w) => b.has(w));
-  const selected = matched.filter(
-    (m, i) => !matched.some((other, j) => j < i && isSubset(m.words, other.words)),
+/** Monta as fotos a partir dos produtos pedidos pela IA via enviar_fotos, na ordem em que foram pedidos.
+ *  Um produto: até 3 fotos dele, com o texto da resposta como legenda. Vários: a primeira foto de cada
+ *  um, com nome e preço na legenda. */
+function buildReplyImages(requested: ProductCandidate[]): ReplyImage[] {
+  const products = requested.filter(
+    (p, i) => p.imagens.length > 0 && requested.findIndex((o) => o.nome === p.nome) === i,
   );
 
-  if (selected.length === 0) return [];
-  if (selected.length === 1) {
-    return selected[0].candidate.imagens.slice(0, MAX_IMAGES_SINGLE_PRODUCT).map((url) => ({ url }));
+  if (products.length === 0) return [];
+  if (products.length === 1) {
+    return products[0].imagens.slice(0, MAX_IMAGES_SINGLE_PRODUCT).map((url) => ({ url }));
   }
-
-  // Vários produtos: a primeira foto de cada um, na ordem em que aparecem no texto, com legenda própria.
-  const position = (m: (typeof selected)[number]) =>
-    Math.min(...[...m.words].map((w) => normalizedText.indexOf(w)));
-  return selected
-    .sort((a, b) => position(a) - position(b))
-    .map((m) => ({ url: m.candidate.imagens[0], caption: productCaption(m.candidate) }))
-    .slice(0, MAX_IMAGES_PER_REPLY);
+  return products
+    .slice(0, MAX_IMAGES_PER_REPLY)
+    .map((p) => ({ url: p.imagens[0], caption: productCaption(p) }));
 }
 
 export async function generateReply(params: {
@@ -193,7 +165,7 @@ export async function generateReply(params: {
   ];
 
   let handoffTriggered = false;
-  const candidates: ProductCandidate[] = [];
+  const requestedPhotos: ProductCandidate[] = [];
 
   for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
     const response = await getAnthropicClient().messages.create({
@@ -218,7 +190,7 @@ export async function generateReply(params: {
       return {
         text: finalText,
         handoffTriggered,
-        images: pickImagesForText(finalText, candidates),
+        images: buildReplyImages(requestedPhotos),
       };
     }
 
@@ -234,7 +206,9 @@ export async function generateReply(params: {
         toolUse.input as Record<string, unknown>,
         ctx,
       );
-      candidates.push(...extractCandidates(result));
+      if (toolUse.name === PHOTOS_TOOL_NAME) {
+        requestedPhotos.push(...extractCandidates(result));
+      }
       toolResults.push({
         type: "tool_result",
         tool_use_id: toolUse.id,

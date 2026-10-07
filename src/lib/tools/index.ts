@@ -5,6 +5,7 @@ export { toolDefinitions } from "@/lib/tools/definitions";
 export type { ToolContext };
 
 export const HANDOFF_TOOL_NAME = "transferir_atendimento_humano";
+export const PHOTOS_TOOL_NAME = "enviar_fotos";
 
 export async function runTool(name: string, input: Record<string, unknown>, ctx: ToolContext) {
   switch (name) {
@@ -14,6 +15,8 @@ export async function runTool(name: string, input: Record<string, unknown>, ctx:
       return handlers.consultarPreco(ctx, input as never);
     case "buscar_produtos_similares":
       return handlers.buscarProdutosSimilares(ctx, input as never);
+    case "enviar_fotos":
+      return handlers.enviarFotos(ctx, input as never);
     case "criar_pedido":
       return handlers.criarPedido(ctx, input as never);
     case "verificar_status_pedido":
