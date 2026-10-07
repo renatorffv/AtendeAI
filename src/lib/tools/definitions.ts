@@ -50,6 +50,8 @@ export const toolDefinitions: Anthropic.Tool[] = [
     description:
       "Envia para a cliente as fotos de um ou mais produtos do catálogo, junto com a sua resposta. É a ÚNICA " +
       "forma de mandar fotos: use sempre que a cliente pedir fotos, inclusive para reenviar fotos já mandadas. " +
+      "Inclua SOMENTE os produtos cujas fotos a cliente pediu na mensagem atual — nunca produtos de pedidos " +
+      "de fotos anteriores da conversa. " +
       "Informe o nome completo de cada produto, exatamente como aparece no catálogo, e o SKU quando souber.",
     input_schema: {
       type: "object",

@@ -32,7 +32,9 @@ Ao apresentar produtos, mencione nome, preço e tamanhos/cores disponíveis. Se 
 (campo temFotos), deixe claro que você pode enviar fotos.
 Fotos só chegam à cliente pela ferramenta ${PHOTOS_TOOL_NAME}: sempre que ela pedir fotos (inclusive para
 mandar de novo), chame essa ferramenta com o nome completo de cada produto. Nunca diga que enviou fotos sem
-ter chamado ${PHOTOS_TOOL_NAME} nesta mesma resposta. Quando mandar fotos de vários produtos, cada foto já
+ter chamado ${PHOTOS_TOOL_NAME} nesta mesma resposta. Mande fotos SOMENTE dos produtos que a cliente pediu na
+mensagem atual — pedidos de fotos anteriores já foram atendidos (as respostas com fotos aparecem no histórico
+marcadas com ${PHOTOS_SENT_NOTE}); nunca reenvie fotos de outros produtos por conta própria. Quando mandar fotos de vários produtos, cada foto já
 vai com nome e preço na legenda — então mantenha o texto da resposta curto, sem repetir a lista.
 Nunca inclua links ou URLs nas mensagens.
 Confirme sempre os itens, tamanhos e quantidades com o cliente antes de chamar a ferramenta criar_pedido.
@@ -49,12 +51,16 @@ Responda sempre em português do Brasil, em mensagens curtas adequadas para What
   return base + handoff + extra;
 }
 
+const PHOTOS_SENT_NOTE = "[fotos enviadas junto com esta mensagem]";
+
+/** O histórico só guarda texto; sem a marcação de que a resposta teve fotos, o modelo não sabe que um
+ *  pedido de fotos antigo já foi atendido e volta a mandar as mesmas fotos em respostas seguintes. */
 function historyToMessages(history: DbMessage[]): Anthropic.MessageParam[] {
   return history
     .slice(-MAX_HISTORY_MESSAGES)
     .map((m): Anthropic.MessageParam => ({
       role: m.direction === "IN" ? "user" : "assistant",
-      content: m.content,
+      content: m.direction === "OUT" && m.mediaUrl ? `${m.content}\n\n${PHOTOS_SENT_NOTE}` : m.content,
     }));
 }
 
@@ -110,9 +116,11 @@ function hideImageUrls(result: unknown): unknown {
   };
 }
 
-/** Rede de segurança: remove qualquer link que ainda apareça no texto antes de ir para o WhatsApp. */
+/** Rede de segurança: remove qualquer link que ainda apareça no texto antes de ir para o WhatsApp
+ *  (e a marcação interna de fotos do histórico, caso o modelo a imite). */
 function stripLinks(text: string): string {
   return text
+    .replace(/\[fotos enviadas[^\]]*\]/gi, "")
     .replace(/\[([^\]]+)\]\(\s*https?:\/\/[^)]*\)/gi, "$1")
     .replace(/<?https?:\/\/[^\s>)]+>?/gi, "")
     .replace(/[ \t]+$/gm, "")
