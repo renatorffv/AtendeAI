@@ -118,17 +118,28 @@ export async function POST(
         direction: "OUT",
         sender: "BOT",
         content: text,
-        mediaUrl: images[0] ?? null,
+        mediaUrl: images[0]?.url ?? null,
         mediaType: images[0] ? "image" : null,
       },
     });
 
-    if (images.length > 0) {
-      await sendImage(creds, parsed.remoteJid, images[0], text, typingDelayFor(text)).catch((err) =>
+    if (images.some((img) => img.caption)) {
+      // Fotos de vários produtos: o texto vai sozinho e cada foto leva o nome/preço do seu produto,
+      // para a cliente não confundir qual descrição é de qual foto.
+      await sendText(creds, parsed.remoteJid, text, typingDelayFor(text)).catch((err) =>
+        console.error("Falha ao enviar resposta via Evolution API:", err),
+      );
+      for (const img of images) {
+        await sendImage(creds, parsed.remoteJid, img.url, img.caption, pauseBetweenImages()).catch((err) =>
+          console.error("Falha ao enviar imagem via Evolution API:", err),
+        );
+      }
+    } else if (images.length > 0) {
+      await sendImage(creds, parsed.remoteJid, images[0].url, text, typingDelayFor(text)).catch((err) =>
         console.error("Falha ao enviar imagem via Evolution API:", err),
       );
       for (const extra of images.slice(1)) {
-        await sendImage(creds, parsed.remoteJid, extra, undefined, pauseBetweenImages()).catch((err) =>
+        await sendImage(creds, parsed.remoteJid, extra.url, undefined, pauseBetweenImages()).catch((err) =>
           console.error("Falha ao enviar imagem extra via Evolution API:", err),
         );
       }

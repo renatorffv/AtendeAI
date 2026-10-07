@@ -59,19 +59,31 @@ export type IncomingContent = {
 const MAX_IMAGES_PER_REPLY = 4;
 const MAX_IMAGES_SINGLE_PRODUCT = 3;
 
-type ProductCandidate = { nome: string; imagens: string[] };
+type ProductCandidate = { nome: string; imagens: string[]; preco: number | null };
+
+/** Foto a enviar. `caption` só vem preenchida quando a resposta tem fotos de vários produtos: aí cada
+ *  foto leva o nome e o preço do seu produto, e o texto da resposta vai numa mensagem separada. */
+export type ReplyImage = { url: string; caption?: string };
 
 /** Extrai os produtos citados num resultado de ferramenta (consultar_estoque, consultar_preco,
  *  buscar_produtos_similares), para depois casar com o texto final da resposta. */
 function extractCandidates(result: unknown): ProductCandidate[] {
-  const produtos = (result as { produtos?: { nome?: unknown; imagens?: unknown }[] } | null)?.produtos;
+  const produtos = (result as { produtos?: { nome?: unknown; imagens?: unknown; preco?: unknown }[] } | null)
+    ?.produtos;
   if (!Array.isArray(produtos)) return [];
   return produtos
-    .filter((p): p is { nome: string; imagens: string[] } => typeof p?.nome === "string")
+    .filter((p): p is { nome: string; imagens: unknown; preco: unknown } => typeof p?.nome === "string")
     .map((p) => ({
       nome: p.nome,
       imagens: Array.isArray(p.imagens) ? p.imagens.filter((u): u is string => typeof u === "string") : [],
+      preco: typeof p.preco === "number" ? p.preco : null,
     }));
+}
+
+function productCaption(candidate: ProductCandidate): string {
+  if (candidate.preco === null) return `*${candidate.nome}*`;
+  const price = candidate.preco.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+  return `*${candidate.nome}* — ${price}`;
 }
 
 /** O resultado das ferramentas vai para o modelo sem as URLs das fotos (só `temFotos`): com a URL
@@ -112,7 +124,7 @@ function normalize(s: string): string {
  *  assumir o primeiro resultado de busca. Pode haver vários produtos citados (ex: "fotos dos dois
  *  shorts"); um candidato é descartado quando as palavras que bateram dele estão contidas nas de
  *  outro candidato — assim "Short Jeans Azul" no texto não puxa também a foto do "Short Jeans Preto". */
-function pickImagesForText(text: string, candidates: ProductCandidate[]): string[] {
+function pickImagesForText(text: string, candidates: ProductCandidate[]): ReplyImage[] {
   const normalizedText = normalize(text);
   const seen = new Set<string>();
   const matched: { candidate: ProductCandidate; words: Set<string>; score: number }[] = [];
@@ -141,14 +153,16 @@ function pickImagesForText(text: string, candidates: ProductCandidate[]): string
   );
 
   if (selected.length === 0) return [];
-  if (selected.length === 1) return selected[0].candidate.imagens.slice(0, MAX_IMAGES_SINGLE_PRODUCT);
+  if (selected.length === 1) {
+    return selected[0].candidate.imagens.slice(0, MAX_IMAGES_SINGLE_PRODUCT).map((url) => ({ url }));
+  }
 
-  // Vários produtos: a primeira foto de cada um, na ordem em que aparecem no texto.
+  // Vários produtos: a primeira foto de cada um, na ordem em que aparecem no texto, com legenda própria.
   const position = (m: (typeof selected)[number]) =>
     Math.min(...[...m.words].map((w) => normalizedText.indexOf(w)));
   return selected
     .sort((a, b) => position(a) - position(b))
-    .map((m) => m.candidate.imagens[0])
+    .map((m) => ({ url: m.candidate.imagens[0], caption: productCaption(m.candidate) }))
     .slice(0, MAX_IMAGES_PER_REPLY);
 }
 
@@ -157,7 +171,7 @@ export async function generateReply(params: {
   history: DbMessage[];
   incoming: IncomingContent;
   ctx: ToolContext;
-}): Promise<{ text: string; handoffTriggered: boolean; images: string[] }> {
+}): Promise<{ text: string; handoffTriggered: boolean; images: ReplyImage[] }> {
   const { store, history, incoming, ctx } = params;
 
   const userContent: Anthropic.ContentBlockParam[] = [];
