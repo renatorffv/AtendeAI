@@ -129,6 +129,52 @@ function stripLinks(text: string): string {
     .trim();
 }
 
+const NAME_STOPWORDS = new Set(["com", "sem", "para", "dos", "das", "nos", "nas", "por"]);
+
+function normalizeWords(s: string): string[] {
+  return s
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((w) => w.length > 2 && !NAME_STOPWORDS.has(w));
+}
+
+/** "shorts"/"short", "blusa"/"blusinha": compara pelas 4 primeiras letras; palavras curtas, só iguais. */
+function sameWord(a: string, b: string) {
+  return a.length >= 4 && b.length >= 4 ? a.slice(0, 4) === b.slice(0, 4) : a === b;
+}
+
+function mentions(text: string, productName: string) {
+  const textWords = normalizeWords(text);
+  return normalizeWords(productName).some((w) => textWords.some((t) => sameWord(w, t)));
+}
+
+/** Trava no código para a IA não mandar fotos que a cliente não pediu agora (ela tendia a reenviar
+ *  fotos de pedidos antigos da conversa). Se a mensagem atual cita algum dos produtos, só eles passam;
+ *  se é genérica ("manda foto"), passam só os citados na última resposta do bot (os recém-oferecidos).
+ *  Os barrados voltam para a IA como aviso, para ela não dizer que enviou. */
+function limitPhotosToRequest(result: unknown, currentText: string, lastBotText: string): unknown {
+  const r = result as { produtos?: { nome?: unknown }[]; mensagem?: unknown } | null;
+  if (!r || !Array.isArray(r.produtos) || r.produtos.length === 0) return result;
+
+  const named = r.produtos.filter((p) => typeof p?.nome === "string") as { nome: string }[];
+  const scope = named.some((p) => mentions(currentText, p.nome)) ? currentText : lastBotText;
+  const allowed = named.filter((p) => mentions(scope, p.nome));
+  const blocked = named.filter((p) => !allowed.includes(p));
+  if (blocked.length === 0) return result;
+
+  const aviso =
+    `Fotos NÃO enviadas de: ${blocked.map((p) => p.nome).join(", ")} — a cliente não pediu fotos desse(s) ` +
+    "produto(s) agora. Não diga que enviou essas fotos.";
+  return {
+    ...r,
+    sucesso: allowed.length > 0,
+    produtos: allowed,
+    mensagem: typeof r.mensagem === "string" ? `${r.mensagem} ${aviso}` : aviso,
+  };
+}
+
 /** Monta as fotos a partir dos produtos pedidos pela IA via enviar_fotos, na ordem em que foram pedidos.
  *  Um produto: até 3 fotos dele, com o texto da resposta como legenda. Vários: a primeira foto de cada
  *  um, com nome e preço na legenda. */
@@ -174,6 +220,7 @@ export async function generateReply(params: {
 
   let handoffTriggered = false;
   const requestedPhotos: ProductCandidate[] = [];
+  const lastBotText = history.findLast((m) => m.direction === "OUT")?.content ?? "";
 
   for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
     const response = await getAnthropicClient().messages.create({
@@ -209,12 +256,13 @@ export async function generateReply(params: {
       if (toolUse.name === HANDOFF_TOOL_NAME) {
         handoffTriggered = true;
       }
-      const result = await runTool(
+      let result: unknown = await runTool(
         toolUse.name,
         toolUse.input as Record<string, unknown>,
         ctx,
       );
       if (toolUse.name === PHOTOS_TOOL_NAME) {
+        result = limitPhotosToRequest(result, incoming.text, lastBotText);
         requestedPhotos.push(...extractCandidates(result));
       }
       toolResults.push({
