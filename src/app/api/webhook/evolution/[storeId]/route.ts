@@ -95,11 +95,15 @@ export async function POST(
       );
     }
 
-    const history = await db.message.findMany({
-      where: { conversationId },
-      orderBy: { createdAt: "asc" },
-      take: 40,
-    });
+    // As 40 mais recentes (desc + reverse): com "asc", conversas longas ficavam presas às 40 primeiras
+    // mensagens e a IA não via o que a cliente disse depois (ex: reenviava fotos de um pedido antigo).
+    const history = (
+      await db.message.findMany({
+        where: { conversationId },
+        orderBy: { createdAt: "desc" },
+        take: 40,
+      })
+    ).reverse();
 
     const { text, images } = await generateReply({
       store,
